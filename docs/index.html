@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Space-Ground Mission Control</title>
+<meta name="description" content="Browser demo of a simulated LEO satellite and ground station exchanging CCSDS-style packets.">
+<style>
+  :root {
+    --bg: #0e1420; --panel: #172033; --line: #26324b; --text: #e6ebf5; --muted: #8b97b1;
+    --accent: #4da3ff; --ok: #3ecf8e; --warn: #f5a524; --bad: #ff5d5d;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f2f4f9; --panel: #fff; --line: #d8deea; --text: #17202f; --muted: #5b6678; --accent: #0b6bcb; --ok: #12875a; --bad: #d12c2c; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, sans-serif; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  h1 { font-size: 16px; margin: 0; }
+  header p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+  #link { font-size: 12px; padding: 2px 10px; border-radius: 99px; border: 1px solid var(--line); }
+  #link.up { color: var(--ok); } #link.down { color: var(--bad); }
+  main { display: grid; gap: 12px; padding: 12px 16px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; min-width: 0; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .tile { background: var(--bg); border-radius: 6px; padding: 8px; }
+  .tile .k { color: var(--muted); font-size: 11px; }
+  .tile .v { font-size: 18px; font-variant-numeric: tabular-nums; }
+  .tile.alarm .v { color: var(--bad); }
+  canvas { width: 100%; height: 140px; display: block; }
+  #map { height: 180px; }
+  .btns { display: flex; flex-wrap: wrap; gap: 6px; }
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 7px 12px; font: inherit; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: wait; }
+  button.secondary { background: transparent; color: var(--text); border: 1px solid var(--line); }
+  label { display: block; margin: 6px 0; font-size: 12px; color: var(--muted); }
+  label input { width: 100%; }
+  ul { list-style: none; margin: 0; padding: 0; max-height: 160px; overflow: auto; font: 12px ui-monospace, monospace; }
+  li { padding: 3px 0; border-bottom: 1px solid var(--line); }
+  li.bad { color: var(--bad); } li.good { color: var(--ok); }
+  pre { margin: 0 0 8px; padding: 6px 8px; background: var(--bg); border-radius: 6px; font: 11px ui-monospace, monospace; white-space: pre-wrap; word-break: break-all; min-height: 2.4em; }
+  .wide { grid-column: 1 / -1; }
+  footer { padding: 8px 16px 20px; color: var(--muted); font-size: 12px; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Space-Ground Mission Control</h1>
+    <p>Simulated LEO satellite and ground station. Runs entirely in your browser.</p>
+  </div>
+  <span id="link" class="down">no link</span>
+</header>
+<main>
+  <section>
+    <h2>Spacecraft state</h2>
+    <div class="grid" id="tiles"><div class="tile"><div class="k">Waiting for telemetry</div><div class="v">&hellip;</div></div></div>
+  </section>
+  <section>
+    <h2>Commands</h2>
+    <div class="btns" id="buttons"></div>
+    <div class="btns" style="margin-top:8px">
+      <button id="demo" class="secondary">Run scripted pass (16 s)</button>
+      <button id="restart" class="secondary">Restart simulation</button>
+    </div>
+    <h2 style="margin-top:12px">Command log</h2>
+    <ul id="cmdlog"></ul>
+  </section>
+  <section>
+    <h2>Battery state of charge (%)</h2>
+    <canvas id="soc"></canvas>
+  </section>
+  <section>
+    <h2>Temperature (&deg;C)</h2>
+    <canvas id="temp"></canvas>
+  </section>
+  <section class="wide">
+    <h2>Ground track</h2>
+    <canvas id="map"></canvas>
+  </section>
+  <section>
+    <h2>Link</h2>
+    <label>Time scale: <span id="timescale-v">300x</span>
+      <input id="timescale" type="range" min="10" max="1000" step="10" value="300"></label>
+    <label>Downlink packet loss: <span id="loss-v">5%</span>
+      <input id="loss" type="range" min="0" max="50" step="1" value="5"></label>
+    <div class="grid" id="stats" style="margin-top:8px"></div>
+  </section>
+  <section>
+    <h2>Alarms (<span id="alarm-count">0</span>)</h2>
+    <ul id="alarms"></ul>
+  </section>
+  <section class="wide">
+    <h2>Raw packets on the wire (hex)</h2>
+    <pre id="uplink-hex">Send a command to see the uplink packet.</pre>
+    <pre id="ack-hex"></pre>
+    <pre id="hk-hex"></pre>
+  </section>
+</main>
+<footer>
+  JavaScript port of the Python reference implementation; the packet format is identical, so the packets above are
+  byte-for-byte what the Python elements send over UDP.
+</footer>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

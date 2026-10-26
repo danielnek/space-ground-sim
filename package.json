@@ -1,0 +1,10 @@
+{
+  "name": "spacesim-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "JavaScript port of the space-ground simulator, served from docs/ via GitHub Pages",
+  "scripts": {
+    "test": "node --test \"tests/js/*.test.js\""
+  }
+}
