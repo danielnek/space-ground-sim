@@ -53,6 +53,18 @@ ground> heater on
 ground> status
 ```
 
+**Web GUI** (both elements in one process, served on localhost only):
+
+```powershell
+py -m spacesim.web                 # then open http://127.0.0.1:8000/
+py -m spacesim.web --port 8080 --time-scale 600 --loss 0.1
+```
+
+The page shows live telemetry, battery and temperature charts with limit lines, a ground
+track, link statistics, alarms, and buttons for each telecommand. It uses only the standard
+library. It needs the Python server, so it cannot be hosted on GitHub Pages. This change does
+not touch `packets.py` or `messages.py`, so the wire format is unchanged.
+
 ## Test
 
 ```powershell

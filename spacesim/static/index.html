@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Space-Ground Mission Control</title>
+<style>
+  :root {
+    --bg: #0e1420; --panel: #172033; --line: #26324b; --text: #e6ebf5; --muted: #8b97b1;
+    --accent: #4da3ff; --ok: #3ecf8e; --warn: #f5a524; --bad: #ff5d5d;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f2f4f9; --panel: #fff; --line: #d8deea; --text: #17202f; --muted: #5b6678; --accent: #0b6bcb; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, sans-serif; }
+  header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  h1 { font-size: 16px; margin: 0; }
+  #link { font-size: 12px; padding: 2px 10px; border-radius: 99px; border: 1px solid var(--line); }
+  #link.up { color: var(--ok); } #link.down { color: var(--bad); }
+  main { display: grid; gap: 12px; padding: 12px 16px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .tile { background: var(--bg); border-radius: 6px; padding: 8px; }
+  .tile .k { color: var(--muted); font-size: 11px; }
+  .tile .v { font-size: 18px; font-variant-numeric: tabular-nums; }
+  .tile.alarm .v { color: var(--bad); }
+  canvas { width: 100%; height: 140px; display: block; }
+  #map { height: 180px; }
+  .btns { display: flex; flex-wrap: wrap; gap: 6px; }
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 7px 12px; font: inherit; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: wait; }
+  button.secondary { background: transparent; color: var(--text); border: 1px solid var(--line); }
+  ul { list-style: none; margin: 0; padding: 0; max-height: 160px; overflow: auto; font: 12px ui-monospace, monospace; }
+  li { padding: 3px 0; border-bottom: 1px solid var(--line); }
+  li.bad { color: var(--bad); } li.good { color: var(--ok); }
+  .wide { grid-column: 1 / -1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Space-Ground Mission Control</h1>
+  <span id="link" class="down">no link</span>
+</header>
+<main>
+  <section>
+    <h2>Spacecraft state</h2>
+    <div class="grid" id="tiles"></div>
+  </section>
+  <section>
+    <h2>Commands</h2>
+    <div class="btns" id="buttons"></div>
+    <h2 style="margin-top:12px">Command log</h2>
+    <ul id="cmdlog"></ul>
+  </section>
+  <section>
+    <h2>Battery state of charge (%)</h2>
+    <canvas id="soc"></canvas>
+  </section>
+  <section>
+    <h2>Temperature (&deg;C)</h2>
+    <canvas id="temp"></canvas>
+  </section>
+  <section class="wide">
+    <h2>Ground track</h2>
+    <canvas id="map"></canvas>
+  </section>
+  <section>
+    <h2>Link statistics</h2>
+    <div class="grid" id="stats"></div>
+  </section>
+  <section>
+    <h2>Alarms</h2>
+    <ul id="alarms"></ul>
+  </section>
+</main>
+<script>
+const COMMANDS = [
+  ["noop", "NOOP"], ["mode safe", "Mode SAFE"], ["mode nominal", "Mode NOMINAL"], ["mode science", "Mode SCIENCE"],
+  ["heater on", "Heater ON"], ["heater off", "Heater OFF"], ["reset", "Reset counters"],
+];
+const MAX_POINTS = 200;
+const history = { t: [], soc: [], temp: [] };
+const track = [];
+let limits = {};
+let lastTime = null;
+
+const $ = (id) => document.getElementById(id);
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+function tile(k, v, alarm) {
+  return `<div class="tile${alarm ? " alarm" : ""}"><div class="k">${k}</div><div class="v">${v}</div></div>`;
+}
+function outOfLimits(param, value) {
+  const l = limits[param];
+  return l && (value < l.low || value > l.high);
+}
+function addLi(listId, text, cls) {
+  const li = document.createElement("li");
+  li.textContent = text;
+  if (cls) li.className = cls;
+  $(listId).prepend(li);
+}
+
+function render(state) {
+  const tm = state.telemetry;
+  limits = Object.fromEntries(state.limits.map((l) => [l.parameter, l]));
+  $("link").className = tm ? "up" : "down";
+  $("link").textContent = tm ? "link up" : "no link";
+  const s = state.stats;
+  $("stats").innerHTML = tile("Telemetry frames", s.telemetry_received) + tile("Packets lost", s.packets_lost)
+    + tile("Corrupt packets", s.packets_corrupt);
+  $("alarms").innerHTML = "";
+  state.alarms.slice().reverse().forEach((a) => addLi("alarms", a, "bad"));
+  if (!tm) return;
+  $("tiles").innerHTML =
+    tile("Mission time", tm.mission_time_s.toFixed(0) + " s") + tile("Mode", tm.mode)
+    + tile("Battery", tm.battery_soc_pct.toFixed(1) + " %", outOfLimits("battery_soc_pct", tm.battery_soc_pct))
+    + tile("Bus voltage", tm.battery_voltage_v.toFixed(2) + " V")
+    + tile("Temperature", tm.temperature_c.toFixed(1) + " &deg;C", outOfLimits("temperature_c", tm.temperature_c))
+    + tile("Heater", tm.heater_on ? "ON" : "OFF") + tile("Illumination", tm.sunlit ? "Sunlit" : "Eclipse")
+    + tile("Cmds ok / rejected", tm.commands_accepted + " / " + tm.commands_rejected);
+  if (tm.mission_time_s !== lastTime) {
+    lastTime = tm.mission_time_s;
+    history.t.push(tm.mission_time_s);
+    history.soc.push(tm.battery_soc_pct);
+    history.temp.push(tm.temperature_c);
+    track.push([tm.latitude_deg, tm.longitude_deg]);
+    for (const a of [history.t, history.soc, history.temp, track]) if (a.length > MAX_POINTS) a.shift();
+  }
+  drawLine("soc", history.soc, limits.battery_soc_pct);
+  drawLine("temp", history.temp, limits.temperature_c);
+  drawMap();
+}
+
+function setup(canvas) {
+  const dpr = window.devicePixelRatio || 1;
+  const r = canvas.getBoundingClientRect();
+  canvas.width = r.width * dpr; canvas.height = r.height * dpr;
+  const ctx = canvas.getContext("2d");
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, r.width, r.height);
+  return [ctx, r.width, r.height];
+}
+
+function drawLine(id, ys, limit) {
+  const [ctx, w, h] = setup($(id));
+  if (ys.length < 2) return;
+  let lo = Math.min(...ys), hi = Math.max(...ys);
+  if (limit) { lo = Math.min(lo, limit.low); hi = Math.max(hi, limit.high); }
+  const pad = (hi - lo) * 0.08 || 1; lo -= pad; hi += pad;
+  const y = (v) => h - ((v - lo) / (hi - lo)) * h;
+  ctx.setLineDash([4, 4]); ctx.strokeStyle = css("--bad"); ctx.lineWidth = 1;
+  if (limit) for (const v of [limit.low, limit.high]) { ctx.beginPath(); ctx.moveTo(0, y(v)); ctx.lineTo(w, y(v)); ctx.stroke(); }
+  ctx.setLineDash([]); ctx.strokeStyle = css("--accent"); ctx.lineWidth = 2; ctx.beginPath();
+  ys.forEach((v, i) => { const x = (i / (MAX_POINTS - 1)) * w; i ? ctx.lineTo(x, y(v)) : ctx.moveTo(x, y(v)); });
+  ctx.stroke();
+}
+
+function drawMap() {
+  const [ctx, w, h] = setup($("map"));
+  ctx.strokeStyle = css("--line"); ctx.lineWidth = 1;
+  for (let lon = -180; lon <= 180; lon += 30) { const x = (lon + 180) / 360 * w; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
+  for (let lat = -90; lat <= 90; lat += 30) { const y = (90 - lat) / 180 * h; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
+  const pt = ([lat, lon]) => [(lon + 180) / 360 * w, (90 - lat) / 180 * h];
+  ctx.strokeStyle = css("--accent"); ctx.lineWidth = 2;
+  let prev = null;
+  for (const p of track) {
+    const [x, y] = pt(p);
+    if (prev && Math.abs(x - prev[0]) < w / 2) { ctx.beginPath(); ctx.moveTo(...prev); ctx.lineTo(x, y); ctx.stroke(); }
+    prev = [x, y];
+  }
+  if (prev) { ctx.fillStyle = css("--warn"); ctx.beginPath(); ctx.arc(prev[0], prev[1], 5, 0, 7); ctx.fill(); }
+}
+
+async function send(command, btn) {
+  btn.disabled = true;
+  try {
+    const res = await (await fetch("/api/command", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ command }),
+    })).json();
+    const ok = res.ok && res.status === "ACCEPTED";
+    addLi("cmdlog", `${command} -> ${res.ok ? res.status + " " + res.reason : res.error}`, ok ? "good" : "bad");
+  } catch (e) {
+    addLi("cmdlog", `${command} -> request failed`, "bad");
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+COMMANDS.forEach(([cmd, label], i) => {
+  const b = document.createElement("button");
+  b.textContent = label;
+  if (i === 0 || cmd === "reset") b.className = "secondary";
+  b.onclick = () => send(cmd, b);
+  $("buttons").appendChild(b);
+});
+
+async function poll() {
+  try { render(await (await fetch("/api/state")).json()); }
+  catch (e) { $("link").className = "down"; $("link").textContent = "server unreachable"; }
+}
+poll();
+setInterval(poll, 1000);
+</script>
+</body>
+</html>
