@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(py -m unittest:*)",
+      "Bash(py run_demo.py:*)",
+      "Bash(py -m spacesim.*:*)"
+    ]
+  }
+}
